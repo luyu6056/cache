@@ -82,7 +82,7 @@
 ## _hset.GetExpire()
 获取超时时间，返回时间戳
 ```go
-  fmt.Println(_hset.GetExpire()) //0-无限长
+  fmt.Println(_hset.GetExpire()) //-1无限长
 ```
 
 ## _hset.EXPIRE(expire)
