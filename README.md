@@ -4,14 +4,14 @@
 3. 支持多种格式直接保存读取，string,bool,int-int64,uint-uint64,nil,float32,float64,[]byte，其他格式使用json反序列化获取
 
 # 使用说明
-## Hset(name,value path,expiretimestamp)
+## Hset(name,value path,expire)
 
 * value支持一下三个格式，会转化为string的key与interface{}的value
   * 任意map
   * struct，这时候会按照struct的成员名字转化key，成员值转为value
   * sync.Map
 ```go
-  cache.Hset("luyu6056",map[string]interface{}{"login_time":1591174524},"member_info") //第四个参数，expiretimestamp为过期时间，可以省略，默认永久保存
+  cache.Hset("luyu6056",map[string]interface{}{"login_time":1591174524},"member_info") //第四个参数，expire为过期时间，可以省略，默认永久保存
 ```
 
 ## Hget(name,path)
