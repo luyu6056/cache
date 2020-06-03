@@ -35,10 +35,9 @@ const (
 	CACHE_FILE_NAME = "./cache/db.cache" //持久化储存的文件名
 	ISDEBUG         = true               //是否fmt打印错误
 	SAVE_TIME       = 1                  //持久化间隔时间,单位秒
-
-	GZIP_LIMIT = 4096       //大于这个尺寸就压缩
-	MAXLEN     = 1073741824 //128M 缓存单条消息大于这个尺寸就抛弃
-	GZIP_LEVEL = 6          //压缩等级
+	GZIP_LIMIT      = 4096               //大于这个尺寸就压缩
+	MAXLEN          = 1073741824         //128M 缓存单条消息大于这个尺寸就抛弃
+	GZIP_LEVEL      = 6                  //压缩等级
 )
 
 var (
@@ -46,10 +45,11 @@ var (
 	hashcache_q      []*writeHash                                                                               //写入队列 5000定长
 	hashcache_q_m    sync.Map                                                                                   //写入队列的map
 	hashdelete       sync.Map                                                                                   //待删除变量 map[int64][]map[string]string
-	h_q              sync.Mutex                                                                                 //文件序号
+	queueLock        sync.Mutex                                                                                 //写入队列锁
+	writehashLock    sync.RWMutex                                                                               //writehash锁
 	unserialize_func []func(bin []byte) (*hashvalue, error) = make([]func(bin []byte) (*hashvalue, error), 256) //反序列化方法
 	write_lock       sync.Mutex                                                                                 //写文件锁
-	hash_sync_chan   chan int                               = make(chan int, 1)
+	hash_sync_chan   chan []*writeHash                      = make(chan []*writeHash, 1)
 )
 
 //gzip相关
@@ -66,15 +66,23 @@ type Hashvalue struct { //缓存结构
 	writevalue *writeHash //避免多个副本写入多次数据
 	update     bool       //更新标志
 	path_m     *sync.Map
-	//hot_num int64 //热点计数
 }
 type writeHash struct {
 	path   string //本条缓存所在的path
-	key    string //本条缓存所在的key
+	name   string //本条缓存所在的name
 	un_set bool
 	value  *sync.Map
-	time   int64 //time值说明，为0表示结果为空，为-1表示永久缓存，为正值表示以时间戳为到期时间,-2为删除key,-3为删除path,-4为不处理
+	expire int64 //正值为过期删除时间,其他含义如下
 }
+
+const (
+	expire_keep        = -4 //不处理
+	expire_delete_path = -3 //删除path
+	expire_delete_name = -2 //删除
+	expire_ever        = -1 //永久缓存
+	expire_none        = 0
+)
+
 type hashvalue struct {
 	//b   []byte //原始值
 	i   interface{}
@@ -180,8 +188,7 @@ func (this *Hashvalue) Get(key string, value interface{}) bool {
 				res.i = reflect.ValueOf(value).Elem().Interface()
 				res.typ = r.String()
 			} else {
-
-				DEBUG(err, this.writevalue.key, this.writevalue.path)
+				DEBUG(err, this.writevalue.name, this.writevalue.path)
 			}
 		}
 
@@ -292,38 +299,20 @@ func (this *Hashvalue) Range(f func(string, interface{}) bool) {
 		return f(k.(string), v.(*hashvalue).i)
 	})
 }
-func (this *Hashvalue) Unset() {
-	patch, _ := hashcache.Load(this.writevalue.path)
-	patch.(*sync.Map).Delete(this.writevalue.key)
-}
-func (this *Hashvalue) Save_unset() { //保存再删除
-	if this.update == false {
-		return
+
+func (this *Hashvalue) GetExpire() int64 {
+	if this.writevalue.expire > time.Now().Unix() {
+		return this.writevalue.expire
 	}
-	this.update = false
-	this.writevalue.un_set = true
-	//加入写队列
-	this.value.Range(func(k, v interface{}) bool {
-		this.writevalue.value.Store(k, v)
-		return true
-	})
-	hash_queue(this.writevalue)
-}
-func (this *Hashvalue) Get_expire() int64 {
-	if this.writevalue.time > time.Now().Unix() {
-		return this.writevalue.time
-	}
-	return 0
+	return -1
 }
 
 /**
  *使用Hset,Hset_r可以保存本地文件持久化
- *使用Store方法，可以临时保存内容到缓存，重启进程失效
+ *使用Store方法，可以临时保存内容到缓存，重启失效
  **/
-func (this *Hashvalue) Store(key string, value interface{}, expire ...int64) {
-	if len(expire) == 0 {
-		expire = []int64{-4}
-	}
+func (this *Hashvalue) Store(key string, value interface{}) {
+
 	result, ok := this.value.Load(key)
 
 	if ok {
@@ -381,8 +370,8 @@ func (this *Hashvalue) Store(key string, value interface{}, expire ...int64) {
 	} else {
 		write := new(sync.Map)
 		write.Store(key, new_hashvalue(value))
-		this.do_hash(write, expire[0], "")
-		this = Hget(this.writevalue.key, this.writevalue.path)
+		this.do_hash(write, expire_keep, "")
+		this = Hget(this.writevalue.name, this.writevalue.path)
 	}
 	this.update = true
 }
@@ -397,31 +386,25 @@ func (this *Hashvalue) Delete(key string) {
 		result.(*hashvalue).typ = ""
 		this.writevalue.value.Store(key, result)
 		this.value.Delete(key)
-		hash_write(map[string]map[string]*writeHash{this.writevalue.path: map[string]*writeHash{this.writevalue.key: this.writevalue}})
+		hash_write(map[string]map[string]*writeHash{this.writevalue.path: map[string]*writeHash{this.writevalue.name: this.writevalue}})
 	}
 
 }
 
 //删除掉所有数据
 func (this *Hashvalue) Hdel() {
-	Hdel(this.writevalue.key, this.writevalue.path)
+	Hdel(this.writevalue.name, this.writevalue.path)
 }
-func (this *Hashvalue) Hset(write interface{}, expire ...int64) bool {
-	if len(expire) == 0 {
-		expire = []int64{-4}
-	}
+func (this *Hashvalue) Hset(value interface{}) bool {
 	this.update = false
-	return this.do_hash(write, expire[0], "hset")
+	return this.do_hash(value, expire_keep, "hset")
 }
 
-func (this *Hashvalue) Set(key string, value interface{}, expire ...int64) bool {
-	if len(expire) == 0 {
-		expire = []int64{-4}
-	}
+func (this *Hashvalue) Set(key string, value interface{}) bool {
 	val := new_hashvalue(value)
 	this.update = false
 	this.writevalue.value.Store(key, val)
-	return this.do_hash(this.writevalue.value, expire[0], "hset")
+	return this.do_hash(this.writevalue.value, expire_keep, "hset")
 }
 
 //保存整条缓存
@@ -440,25 +423,37 @@ func (this *Hashvalue) Save() {
 }
 
 //保存整条缓存
-func (this *Hashvalue) Save_r(expire ...int64) {
+func (this *Hashvalue) Save_r() {
 	if this.update == false {
 		return
-	}
-	if len(expire) == 1 {
-		this.writevalue.time = time.Now().Unix() + expire[0]
 	}
 	this.value.Range(func(k, v interface{}) bool {
 		this.writevalue.value.Store(k, v)
 		return true
 	})
 
-	hash_write(map[string]map[string]*writeHash{this.writevalue.path: map[string]*writeHash{this.writevalue.key: this.writevalue}})
+	hash_write(map[string]map[string]*writeHash{this.writevalue.path: map[string]*writeHash{this.writevalue.name: this.writevalue}})
 }
 
 //设置超时
 func (this *Hashvalue) Expire(expire int64) {
-	this.update = true
-	this.do_hash(nil, expire, "expire")
+	if expire <= 0 {
+		this.Hdel()
+	} else {
+		this.update = true
+		this.do_hash(nil, expire, "expire")
+	}
+}
+
+//设置超时删除，到期删除这一组数据，参数时间戳
+func (this *Hashvalue) ExpireAt(timestamp int64) {
+	expire := timestamp - time.Now().Unix()
+	if expire <= 0 {
+		this.Hdel()
+	} else {
+		this.update = true
+		this.do_hash(nil, expire, "expire")
+	}
 }
 
 /**
@@ -478,63 +473,65 @@ func (this *Hashvalue) do_hash(value_i interface{}, expire int64, t string) bool
 	}
 
 	value, ok := get_value(value_i)
-
 	if !ok {
 		return false
 	}
+	writehashLock.RLock()
+	defer writehashLock.RUnlock()
 	path_v := this.path_m
 	var writevalue_new bool
 	//对原始缓存进行更新
-	value.Range(func(k, v interface{}) bool {
-		if w_v, ok := this.writevalue.value.LoadOrStore(k, v); ok {
-			if w_v.(*hashvalue).typ != v.(*hashvalue).typ || w_v.(*hashvalue).str != v.(*hashvalue).str {
-				this.writevalue.value.Store(k, v)
-				writevalue_new = true
+	if value != nil {
+		value.Range(func(k, v interface{}) bool {
+			if w_v, ok := this.writevalue.value.LoadOrStore(k, v); ok {
+				if w_v.(*hashvalue).typ != v.(*hashvalue).typ || w_v.(*hashvalue).str != v.(*hashvalue).str {
+					this.writevalue.value.Store(k, v)
+					writevalue_new = true
+				}
 			}
-		}
-		if v_v, ok := this.value.LoadOrStore(k, v); ok {
-			if v_v.(*hashvalue).typ != v.(*hashvalue).typ || v_v.(*hashvalue).str != v.(*hashvalue).str {
-				this.value.Store(k, v)
+			if v_v, ok := this.value.LoadOrStore(k, v); ok {
+				if v_v.(*hashvalue).typ != v.(*hashvalue).typ || v_v.(*hashvalue).str != v.(*hashvalue).str {
+					this.value.Store(k, v)
+				}
 			}
-		}
 
-		return true
-	})
+			return true
+		})
+	}
 
 	//持久化时间 -4不设置超时信息，继承旧值或者初始化
-	if expire == -4 {
-		if this.writevalue.time != 0 {
+	if expire == expire_keep {
+		if this.writevalue.expire != 0 {
 			//继承旧值
-			expire = this.writevalue.time
+			expire = this.writevalue.expire
 		} else {
 			//初始化永久缓存
-			expire = -1
+			expire = expire_ever
 		}
 	} else {
 		if expire > 0 {
 			expire = time.Now().Unix() + expire
-			h_q.Lock()
+			queueLock.Lock()
 			if v, ok := hashdelete.Load(expire); ok {
 				h := v.([]map[string]string)
-
-				h = append(h, map[string]string{"key": this.writevalue.key, "path": this.writevalue.path})
+				h = append(h, map[string]string{"name": this.writevalue.name, "path": this.writevalue.path})
 			} else {
-				hashdelete.Store(expire, []map[string]string{map[string]string{"key": this.writevalue.key, "path": this.writevalue.path}})
+				hashdelete.Store(expire, []map[string]string{map[string]string{"name": this.writevalue.name, "path": this.writevalue.path}})
 			}
-			h_q.Unlock()
+			queueLock.Unlock()
 		} else {
-			expire = -1
+			expire = expire_ever
 		}
 	}
-	if !writevalue_new && this.writevalue.time == expire {
+	if !writevalue_new && this.writevalue.expire == expire {
 		return true //没有任何变化，不触发写入
 	}
 	//赋值，写入持久化
-	this.writevalue.time = expire
+	this.writevalue.expire = expire
 
 	switch t {
 	case "":
-		path_v.Store(this.writevalue.key, this)
+		path_v.Store(this.writevalue.name, this)
 		hashcache.Store(this.writevalue.path, path_v)
 	case "hset":
 		this.update = false
@@ -629,13 +626,13 @@ func hash_write(write map[string]map[string]*writeHash) {
 	write_lock.Lock()
 	defer write_lock.Unlock()
 
-	f1, err1 := os.OpenFile(CACHE_FILE_NAME, os.O_CREATE|os.O_APPEND|os.O_RDWR, 666)
+	f1, err1 := os.OpenFile(CACHE_FILE_NAME, os.O_APPEND|os.O_RDWR|os.O_CREATE, 0666)
 	if err1 != nil {
 		DEBUG(err1, "hash文件创建失败")
 		return
 	}
 	defer f1.Close()
-	f2, err2 := os.OpenFile(CACHE_FILE_NAME+".bak", os.O_CREATE|os.O_APPEND|os.O_RDWR, 666)
+	f2, err2 := os.OpenFile(CACHE_FILE_NAME+".bak", os.O_APPEND|os.O_RDWR|os.O_CREATE, 0666)
 	if err2 != nil {
 		DEBUG(err2, "hash文件创建失败")
 		return
@@ -699,16 +696,16 @@ func write_file_func(write map[string]map[string]*writeHash, f *os.File) {
 			b := []byte(val.path)
 			binary.Write(b1, binary.LittleEndian, uint16(len(b)))
 			b1.Write(b)
-			b = []byte(val.key)
+			b = []byte(val.name)
 
 			binary.Write(b1, binary.LittleEndian, uint16(len(b)))
 			b1.Write(b)
-			binary.Write(b1, binary.LittleEndian, uint64(val.time))
+			binary.Write(b1, binary.LittleEndian, uint64(val.expire))
 			binary.Write(b1, binary.LittleEndian, uint32(b2.Len()))
 			b1.Write(b2.Bytes())
 			if val.un_set == true {
 				patch, _ := hashcache.Load(val.path)
-				patch.(*sync.Map).Delete(val.key)
+				patch.(*sync.Map).Delete(val.name)
 			}
 			is_compress := false
 			if b1.Len() > GZIP_LIMIT {
@@ -778,8 +775,8 @@ func hash_write_db() {
 			write_hash := new(writeHash)
 			write_hash.value = new(sync.Map)
 			write_hash.path = v_i.(*Hashvalue).writevalue.path
-			write_hash.key = v_i.(*Hashvalue).writevalue.key
-			write_hash.time = v_i.(*Hashvalue).writevalue.time
+			write_hash.name = v_i.(*Hashvalue).writevalue.name
+			write_hash.expire = v_i.(*Hashvalue).writevalue.expire
 			v_i.(*Hashvalue).value.Range(func(kk_i, vv interface{}) bool {
 				write_hash.value.Store(kk_i, vv)
 				return true
@@ -787,7 +784,7 @@ func hash_write_db() {
 			if write[v_i.(*Hashvalue).writevalue.path] == nil {
 				write[v_i.(*Hashvalue).writevalue.path] = make(map[string]*writeHash)
 			}
-			write[v_i.(*Hashvalue).writevalue.path][v_i.(*Hashvalue).writevalue.key] = write_hash
+			write[v_i.(*Hashvalue).writevalue.path][v_i.(*Hashvalue).writevalue.name] = write_hash
 			return true
 		})
 		return true
@@ -1127,11 +1124,11 @@ func init_unserialize_func() {
  */
 
 //写入数据
-func Hset(key string, value interface{}, path string, expire ...int64) bool {
+func Hset(name string, value interface{}, path string, expire ...int64) bool {
 	if len(expire) == 0 {
-		expire = []int64{-4}
+		expire = []int64{expire_ever}
 	}
-	cache := Hget(key, path)
+	cache := Hget(name, path)
 
 	return cache.do_hash(value, expire[0], "hset")
 }
@@ -1139,36 +1136,35 @@ func Hset(key string, value interface{}, path string, expire ...int64) bool {
 //哈希队列操作函数
 func hash_queue(value *writeHash) {
 	if _, ok := hashcache_q_m.LoadOrStore(uintptr(unsafe.Pointer(value)), true); ok {
-
 		return
 	}
-
-	h_q.Lock()
+	queueLock.Lock()
 	hashcache_q = append(hashcache_q, value)
-	h_q.Unlock()
-	if len(hashcache_q) == 5000 && len(hash_sync_chan) == 0 {
-		hash_sync_chan <- 1
+	if len(hashcache_q) >= 5000 && len(hash_sync_chan) == 0 {
+		send_queue()
 	}
+	queueLock.Unlock()
+}
+func send_queue() {
+	tmp := make([]*writeHash, len(hashcache_q))
+	copy(tmp, hashcache_q)
+	hash_sync_chan <- tmp
+	hashcache_q = hashcache_q[:0]
 }
 
 //hash读取
-func Has(key string, path string) (*Hashvalue, bool) {
+func Has(name string, path string) (*Hashvalue, bool) {
 	v, ok := hashcache.Load(path)
 	if !ok {
 		return nil, false
 	}
-	vv, ok := v.(*sync.Map).Load(key)
+	vv, ok := v.(*sync.Map).Load(name)
 	if ok {
 		return vv.(*Hashvalue), true
 	}
 	return nil, false
 }
-func Hget(key string, path string /*hot ...bool*/) *Hashvalue {
-	/*enable_bot := true
-	if len(hot) == 1 {
-		enable_bot = hot[0]
-	}*/
-
+func Hget(name string, path string) *Hashvalue {
 	var value_v *Hashvalue
 	var path_v *sync.Map
 	path_v_i, ok := hashcache.Load(path)
@@ -1177,60 +1173,35 @@ func Hget(key string, path string /*hot ...bool*/) *Hashvalue {
 		hashcache.Store(path, path_v_i)
 	}
 	path_v = path_v_i.(*sync.Map)
-	value_v_i, ok := path_v.Load(key)
+	value_v_i, ok := path_v.Load(name)
 	if !ok {
-		value_v_i = &Hashvalue{value: new(sync.Map), path_m: path_v, writevalue: &writeHash{path: path, value: new(sync.Map), time: 0, key: key}}
-		path_v.Store(key, value_v_i)
+		value_v_i = &Hashvalue{value: new(sync.Map), path_m: path_v, writevalue: &writeHash{path: path, value: new(sync.Map), expire: expire_none, name: name}}
+		path_v.Store(name, value_v_i)
 	}
 	value_v = value_v_i.(*Hashvalue)
-	if value_v.writevalue.time == -1 || value_v.writevalue.time > time.Now().Unix() {
-		/*if enable_bot && path_v.hot_step != 0 && path_v.hot_max != 0 {
-			value_v.hot_num++
-			if value_v.hot_num > path_v.hot_num_max {
-				value_v.time = time.Now().Unix() + path_v.hot_max
-			} else {
-				value_v.time = time.Now().Unix() + value_v.hot_num*path_v.hot_step
-			}
-		}*/
+	if value_v.writevalue.expire == expire_ever || value_v.writevalue.expire > time.Now().Unix() {
 		return value_v
 	}
 	//超时，重置value_v
-	value_v = &Hashvalue{value: new(sync.Map), path_m: path_v, writevalue: &writeHash{path: path, value: new(sync.Map), time: 0, key: key}}
-	path_v.Store(key, value_v)
+	value_v = &Hashvalue{value: new(sync.Map), path_m: path_v, writevalue: &writeHash{path: path, value: new(sync.Map), expire: expire_none, name: name}}
+	path_v.Store(name, value_v)
 	return value_v
 }
 
-//新建一个具有热点缓存功能的path
-/*func New_hot(path string, hot_step, hot_max int64) {
-	path_v := &cache_path{cache: new(sync.Map)}
-	path_v_i, ok := hashcache.LoadOrStore(path, path_v)
-	if ok {
-		path_v = path_v_i.(*cache_path)
-	}
-	path_v.hot_step = hot_step
-	path_v.hot_max = hot_max
-	path_v.hot_num_max = hot_max / hot_step
-	hot := Hget(path, "_hot", false)
-	write := new(sync.Map)
-	write.Store("step", hot_step)
-	write.Store("max", hot_max)
-	hot.Hset(write)
-}*/
-
 //hash删除
-func Hdel(key_i interface{}, path string) {
-	key := fmt.Sprint(key_i)
+func Hdel(name string, path string) {
+
 	if path_v_i, ok := hashcache.Load(path); ok {
 		path_v := path_v_i.(*sync.Map)
-		if value_i, ok := path_v.Load(key); ok {
+		if value_i, ok := path_v.Load(name); ok {
 			value := value_i.(*Hashvalue)
-			if value.writevalue.time != 0 {
+			if value.writevalue.expire != expire_none {
 				write := new(sync.Map)
 				write.Store("0", new_hashvalue(0))
-				writeString := map[string]map[string]*writeHash{path: map[string]*writeHash{key: &writeHash{key: key, path: path, time: -2, value: write}}}
+				writeString := map[string]map[string]*writeHash{path: map[string]*writeHash{name: &writeHash{name: name, path: path, expire: expire_delete_name, value: write}}}
 				hash_write(writeString)
 			}
-			path_v.Delete(key)
+			path_v.Delete(name)
 		}
 	}
 }
@@ -1243,7 +1214,7 @@ func Hdel_all(path string) {
 		Hdel(path, "_hot")
 		write := new(sync.Map)
 		write.Store("0", &hashvalue{})
-		writeString := map[string]map[string]*writeHash{path: map[string]*writeHash{"": &writeHash{path: path, time: -3, value: write}}}
+		writeString := map[string]map[string]*writeHash{path: map[string]*writeHash{"": &writeHash{path: path, expire: expire_delete_path, value: write}}}
 		go hash_write(writeString)
 	}
 }
@@ -1297,7 +1268,7 @@ func makehashfromfile(file string, is_main bool) bool {
 		binary.Read(b2, binary.LittleEndian, &l)
 		key := string(b2.Next(int(l)))
 		t := int64(binary.LittleEndian.Uint64(b2.Next(8)))
-		if t == -2 {
+		if t == expire_delete_name {
 			path_v_i, ok := hashcache.Load(path)
 			if ok {
 				path_v := path_v_i.(*sync.Map)
@@ -1306,14 +1277,14 @@ func makehashfromfile(file string, is_main bool) bool {
 			continue
 		}
 
-		if t == -3 {
+		if t == expire_delete_path {
 			_, ok := hashcache.Load(path)
 			if ok {
 				hashcache.Delete(path)
 			}
 			continue
 		}
-		if t != -1 && t < time.Now().Unix() {
+		if t != expire_ever && t < time.Now().Unix() {
 			continue
 		}
 
@@ -1344,14 +1315,14 @@ func makehashfromfile(file string, is_main bool) bool {
 
 		}
 
-		va.writevalue.time = t
+		va.writevalue.expire = t
 		if t > 0 {
 			if v, ok := hashdelete.Load(t); ok {
 				h := v.([]map[string]string)
 
-				h = append(h, map[string]string{"key": va.writevalue.key, "path": va.writevalue.path})
+				h = append(h, map[string]string{"name": va.writevalue.name, "path": va.writevalue.path})
 			} else {
-				hashdelete.Store(t, []map[string]string{map[string]string{"key": va.writevalue.key, "path": va.writevalue.path}})
+				hashdelete.Store(t, []map[string]string{map[string]string{"name": va.writevalue.name, "path": va.writevalue.path}})
 			}
 		}
 		path_i, _ := hashcache.Load(path)
@@ -1395,7 +1366,7 @@ func init() {
 							path_v_i, ok := hashcache.Load(v["path"])
 							if ok {
 								path := path_v_i.(*sync.Map)
-								path.Delete(v["key"])
+								path.Delete(v["name"])
 							}
 						}
 					}
@@ -1405,74 +1376,64 @@ func init() {
 			if t%3600 == 0 && now.Hour() == 4 {
 				go hash_write_db()
 			}
+			queueLock.Lock()
+			send_queue()
+			queueLock.Unlock()
 		}
 	}()
-	hash_sync_chan <- 1
 	go hash_sync()
 }
 func hash_sync() {
 	for signal := range hash_sync_chan {
 
-		go func() {
-			h_q.Lock()
-			defer func() {
-				if err := recover(); err != nil {
-					DEBUG(err)
-				}
-				h_q.Unlock()
-				time.Sleep(time.Second)
-				if len(hash_sync_chan) == 0 {
-					hash_sync_chan <- 1
-				}
-			}()
-			if len(hashcache_q) == 0 {
-				return
-			}
-			if signal == 0 {
-				//最终同步需要锁死不解锁
-				DEBUG("需要同步", len(hashcache_q), "条数据")
-
-			}
-			write := make(map[string]map[string]*writeHash, len(hashcache_q))
-			var success int
-
-			for _, v := range hashcache_q { //分别将队列取出执行hash写入同步
-				success++
-				if v == nil || v.value == nil {
-					continue
-				}
-				hashcache_q_m.Delete(uintptr(unsafe.Pointer(v)))
-				if write[v.path] == nil {
-					write[v.path] = make(map[string]*writeHash)
-				}
-
-				if write[v.path][v.key] == nil {
-					write[v.path][v.key] = v
-				} else {
-					v.value.Range(func(k1, v1 interface{}) bool {
-						write[v.path][v.key].value.Store(k1, v1)
-						return true
-					})
-
-				}
-				//Log("%+v", v)
-				write[v.path][v.key].time = v.time
-			}
-			hashcache_q = hashcache_q[success:] //清掉成功的
-			if len(write) > 0 {
-				//DEBUG(len(write))
-
-				go hash_write(write)
-			}
-		}()
-		if signal == 0 {
+		if signal == nil {
 			break
+		} else {
+			syncHash(signal)
 		}
 	}
 }
+func syncHash(signal []*writeHash) {
+	writehashLock.Lock()
+	defer func() {
+		writehashLock.Unlock()
+		if err := recover(); err != nil {
+			DEBUG(err)
+		}
+	}()
+	if len(signal) == 0 {
+		return
+	}
+	write := make(map[string]map[string]*writeHash, len(signal))
+	var success int
+	for _, v := range signal { //分别将队列取出执行hash写入同步
+		hashcache_q_m.Delete(uintptr(unsafe.Pointer(v)))
+		success++
+		if v == nil || v.value == nil {
+			continue
+		}
+		if write[v.path] == nil {
+			write[v.path] = make(map[string]*writeHash)
+		}
+		if write[v.path][v.name] == nil {
+			write[v.path][v.name] = v
+		} else {
+			v.value.Range(func(k1, v1 interface{}) bool {
+				write[v.path][v.name].value.Store(k1, v1)
+				return true
+			})
+		}
+		write[v.path][v.name].expire = v.expire
+	}
+	if len(write) > 0 {
+		go hash_write(write)
+	}
+
+}
 func Destroy() {
 	fmt.Println("正在退出，请等待缓存写入硬盘")
-	hash_sync_chan <- 0
+	send_queue()
+	hash_sync_chan <- nil
 	fmt.Println("已经保存完毕，如果程序还不退出，请再按crtl+c或者强制关闭进程")
 }
 
