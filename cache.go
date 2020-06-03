@@ -794,7 +794,7 @@ func hash_write_db() {
 
 }
 
-//md5仅用于校验数据完整性
+//仅用于校验数据完整性
 func Crc32_check(s []byte) []byte {
 	bin := make([]byte, 4)
 	binary.LittleEndian.PutUint32(bin, crc32.ChecksumIEEE(s))
@@ -1396,6 +1396,9 @@ func hash_sync() {
 func syncHash(signal []*writeHash) {
 	writehashLock.Lock()
 	defer func() {
+		for _, v := range signal {
+			hashcache_q_m.Delete(uintptr(unsafe.Pointer(v)))
+		}
 		writehashLock.Unlock()
 		if err := recover(); err != nil {
 			DEBUG(err)
@@ -1405,10 +1408,7 @@ func syncHash(signal []*writeHash) {
 		return
 	}
 	write := make(map[string]map[string]*writeHash, len(signal))
-	var success int
 	for _, v := range signal { //分别将队列取出执行hash写入同步
-		hashcache_q_m.Delete(uintptr(unsafe.Pointer(v)))
-		success++
 		if v == nil || v.value == nil {
 			continue
 		}
