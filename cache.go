@@ -32,7 +32,7 @@ var cachebufpool = sync.Pool{
 
 //本cache包会监听ctrl+c事件以保证缓存被正确保存
 const (
-	CACHE_Path+"/"+CACHE_FILE_NAME = "db.cache" //持久化储存的文件名
+	CACHE_FILE_NAME = "db.cache" //持久化储存的文件名
 	CACHE_Path      = "./cache"
 	ISDEBUG         = true       //是否fmt打印错误
 	SAVE_TIME       = 1          //持久化间隔时间,单位秒
@@ -756,14 +756,14 @@ func hash_write_db() {
 	write_lock.Lock()
 	defer write_lock.Unlock()
 	//结构体无法序列化，需要转换
-	f1, err1 := os.Create(CACHE_Path+"/"+CACHE_FILE_NAME)
+	f1, err1 := os.Create(CACHE_Path + "/" + CACHE_FILE_NAME)
 	defer f1.Close()
 	if err1 != nil {
 		DEBUG(err1, "hash_db文件创建失败")
 		return
 	}
 
-	f2, err2 := os.Create(CACHE_Path+"/"+CACHE_FILE_NAME + ".bak")
+	f2, err2 := os.Create(CACHE_Path + "/" + CACHE_FILE_NAME + ".bak")
 	defer f2.Close()
 	if err2 != nil {
 		DEBUG(err1, "hash_db备份文件创建失败")
