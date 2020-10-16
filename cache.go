@@ -32,12 +32,13 @@ var cachebufpool = sync.Pool{
 
 //本cache包会监听ctrl+c事件以保证缓存被正确保存
 const (
-	CACHE_FILE_NAME = "./cache/db.cache" //持久化储存的文件名
-	ISDEBUG         = true               //是否fmt打印错误
-	SAVE_TIME       = 1                  //持久化间隔时间,单位秒
-	GZIP_LIMIT      = 4096               //大于这个尺寸就压缩
-	MAXLEN          = 1073741824         //128M 缓存单条消息大于这个尺寸就抛弃
-	GZIP_LEVEL      = 6                  //压缩等级
+	CACHE_Path+"/"+CACHE_FILE_NAME = "db.cache" //持久化储存的文件名
+	CACHE_Path      = "./cache"
+	ISDEBUG         = true       //是否fmt打印错误
+	SAVE_TIME       = 1          //持久化间隔时间,单位秒
+	GZIP_LIMIT      = 4096       //大于这个尺寸就压缩
+	MAXLEN          = 1073741824 //128M 缓存单条消息大于这个尺寸就抛弃
+	GZIP_LEVEL      = 6          //压缩等级
 )
 
 var (
@@ -626,13 +627,13 @@ func hash_write(write map[string]map[string]*writeHash) {
 	write_lock.Lock()
 	defer write_lock.Unlock()
 
-	f1, err1 := os.OpenFile(CACHE_FILE_NAME, os.O_APPEND|os.O_RDWR|os.O_CREATE, 0666)
+	f1, err1 := os.OpenFile(CACHE_Path+"/"+CACHE_FILE_NAME, os.O_APPEND|os.O_RDWR|os.O_CREATE, 0666)
 	if err1 != nil {
 		DEBUG(err1, "hash文件创建失败")
 		return
 	}
 	defer f1.Close()
-	f2, err2 := os.OpenFile(CACHE_FILE_NAME+".bak", os.O_APPEND|os.O_RDWR|os.O_CREATE, 0666)
+	f2, err2 := os.OpenFile(CACHE_Path+"/"+CACHE_FILE_NAME+".bak", os.O_APPEND|os.O_RDWR|os.O_CREATE, 0666)
 	if err2 != nil {
 		DEBUG(err2, "hash文件创建失败")
 		return
@@ -755,14 +756,14 @@ func hash_write_db() {
 	write_lock.Lock()
 	defer write_lock.Unlock()
 	//结构体无法序列化，需要转换
-	f1, err1 := os.Create(CACHE_FILE_NAME)
+	f1, err1 := os.Create(CACHE_Path+"/"+CACHE_FILE_NAME)
 	defer f1.Close()
 	if err1 != nil {
 		DEBUG(err1, "hash_db文件创建失败")
 		return
 	}
 
-	f2, err2 := os.Create(CACHE_FILE_NAME + ".bak")
+	f2, err2 := os.Create(CACHE_Path+"/"+CACHE_FILE_NAME + ".bak")
 	defer f2.Close()
 	if err2 != nil {
 		DEBUG(err1, "hash_db备份文件创建失败")
@@ -1334,7 +1335,13 @@ func makehashfromfile(file string, is_main bool) bool {
 }
 
 func init() {
+	if ok, _ := PathExists(CACHE_Path); !ok {
+		err := os.Mkdir(CACHE_Path, os.ModePerm)
+		if err != nil {
+			fmt.Printf("cache新建文件夹失败会导致缓存无法持久化![%v]\n", err)
+		}
 
+	}
 	for i := 0; i < runtime.NumCPU(); i++ {
 		uncompress_chan <- new(bytes.Buffer)
 		gzip_writer := new(Gzip_writer)
@@ -1345,11 +1352,11 @@ func init() {
 	init_unserialize_func() //反序列化方法初始化
 
 	hashcache_q = make([]*writeHash, 0, 5000)
-	ok := makehashfromfile(CACHE_FILE_NAME, true) //加载持久化缓存
+	ok := makehashfromfile(CACHE_Path+"/"+CACHE_FILE_NAME, true) //加载持久化缓存
 	if !ok {
-		ok = makehashfromfile(CACHE_FILE_NAME+".bak", false) //尝试从bak文件加载
+		ok = makehashfromfile(CACHE_Path+"/"+CACHE_FILE_NAME+".bak", false) //尝试从bak文件加载
 		if ok {
-			CopyFile(CACHE_FILE_NAME+".bak", CACHE_FILE_NAME)
+			CopyFile(CACHE_Path+"/"+CACHE_FILE_NAME+".bak", CACHE_Path+"/"+CACHE_FILE_NAME)
 		}
 	}
 
@@ -1991,4 +1998,16 @@ func CopyFile(srcName, dstName string) (written int64, err error) {
 	}
 	defer dst.Close()
 	return io.Copy(dst, src)
+}
+
+// 判断文件夹是否存在
+func PathExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
 }
