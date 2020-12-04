@@ -1372,8 +1372,13 @@ func init() {
 						for _, v := range m {
 							path_v_i, ok := hashcache.Load(v["path"])
 							if ok {
-								path := path_v_i.(*sync.Map)
-								path.Delete(v["name"])
+								path_v := path_v_i.(*sync.Map)
+								if value_i, ok := path_v.Load(v["name"]); ok {
+									value := value_i.(*Hashvalue)
+									if value.expire == t || value.expire == expire_delete_name {
+										path_v.Delete(v["name"])
+									}
+								}
 							}
 						}
 					}
