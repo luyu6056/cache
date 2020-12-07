@@ -51,6 +51,7 @@ var (
 	unserialize_func []func(bin []byte) (*hashvalue, error) = make([]func(bin []byte) (*hashvalue, error), 256) //反序列化方法
 	write_lock       sync.Mutex                                                                                 //写文件锁
 	hash_sync_chan   chan []*writeHash                      = make(chan []*writeHash, 1)
+	hash_stop        chan int                               = make(chan int)
 )
 
 //gzip相关
@@ -402,10 +403,8 @@ func (this *Hashvalue) Hset(value interface{}) bool {
 }
 
 func (this *Hashvalue) Set(key string, value interface{}) bool {
-	val := new_hashvalue(value)
 	this.update = false
-	this.writevalue.value.Store(key, val)
-	return this.do_hash(this.writevalue.value, expire_keep, "hset")
+	return this.do_hash(map[string]interface{}{key: value}, expire_keep, "hset")
 }
 
 //保存整条缓存
@@ -489,6 +488,8 @@ func (this *Hashvalue) do_hash(value_i interface{}, expire int64, t string) bool
 					this.writevalue.value.Store(k, v)
 					writevalue_new = true
 				}
+			} else {
+				writevalue_new = true
 			}
 			if v_v, ok := this.value.LoadOrStore(k, v); ok {
 				if v_v.(*hashvalue).typ != v.(*hashvalue).typ || v_v.(*hashvalue).str != v.(*hashvalue).str {
@@ -524,6 +525,7 @@ func (this *Hashvalue) do_hash(value_i interface{}, expire int64, t string) bool
 			expire = expire_ever
 		}
 	}
+
 	if !writevalue_new && this.writevalue.expire == expire {
 		return true //没有任何变化，不触发写入
 	}
@@ -534,7 +536,8 @@ func (this *Hashvalue) do_hash(value_i interface{}, expire int64, t string) bool
 	case "":
 		path_v.Store(this.writevalue.name, this)
 		hashcache.Store(this.writevalue.path, path_v)
-	case "hset":
+	case "hset", "expire":
+
 		this.update = false
 		//加入写队列
 		hash_queue(this.writevalue)
@@ -1396,19 +1399,20 @@ func init() {
 	go hash_sync()
 }
 func hash_sync() {
-	for signal := range hash_sync_chan {
-
-		if signal == nil {
-			break
-		} else {
-			syncHash(signal)
+	for {
+		select {
+		case value := <-hash_sync_chan:
+			syncHash(value)
+		case <-hash_stop:
+			return
 		}
 	}
+
 }
-func syncHash(signal []*writeHash) {
+func syncHash(value []*writeHash) {
 	writehashLock.Lock()
 	defer func() {
-		for _, v := range signal {
+		for _, v := range value {
 			hashcache_q_m.Delete(uintptr(unsafe.Pointer(v)))
 		}
 		writehashLock.Unlock()
@@ -1416,11 +1420,11 @@ func syncHash(signal []*writeHash) {
 			DEBUG(err)
 		}
 	}()
-	if len(signal) == 0 {
+	if len(value) == 0 {
 		return
 	}
-	write := make(map[string]map[string]*writeHash, len(signal))
-	for _, v := range signal { //分别将队列取出执行hash写入同步
+	write := make(map[string]map[string]*writeHash, len(value))
+	for _, v := range value { //分别将队列取出执行hash写入同步
 		if v == nil || v.value == nil {
 			continue
 		}
@@ -1445,7 +1449,7 @@ func syncHash(signal []*writeHash) {
 func Destroy() {
 	fmt.Println("正在退出，请等待缓存写入硬盘")
 	send_queue()
-	hash_sync_chan <- nil
+	hash_stop <- 0
 	fmt.Println("已经保存完毕，如果程序还不退出，请再按crtl+c或者强制关闭进程")
 }
 
