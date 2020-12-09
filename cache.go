@@ -1222,6 +1222,14 @@ func Hdel_all(path string) {
 		go hash_write(writeString)
 	}
 }
+func RangePath(path string, f func(string, *Hashvalue) bool) {
+	path_v_i, ok := hashcache.Load(path)
+	if ok {
+		path_v_i.(*sync.Map).Range(func(k, v interface{}) bool {
+			return f(k.(string), v.(*Hashvalue))
+		})
+	}
+}
 
 /*从单文件读取hash缓存数据
  *传入文件路径
