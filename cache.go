@@ -97,54 +97,59 @@ func new_hashvalue(value interface{}) *hashvalue {
 	h := new(hashvalue)
 	h.i = value
 	h.typ = reflect.TypeOf(value).String()
-	switch value.(type) {
+	switch v := value.(type) {
 	case string:
-		h.str = value.(string)
-		i, _ := strconv.Atoi(value.(string))
+		h.str = v
+		i, _ := strconv.Atoi(v)
 		h.i64 = uint64(i)
 	case int:
-		h.i64 = uint64(value.(int))
-		h.str = strconv.Itoa(int(value.(int)))
+		h.i64 = uint64(v)
+		h.str = strconv.Itoa(int(v))
 	case int8:
-		h.i64 = uint64(value.(int8))
-		h.str = strconv.Itoa(int(value.(int8)))
+		h.i64 = uint64(v)
+		h.str = strconv.Itoa(int(v))
 	case int16:
-		h.i64 = uint64(value.(int16))
-		h.str = strconv.Itoa(int(value.(int16)))
+		h.i64 = uint64(v)
+		h.str = strconv.Itoa(int(v))
 	case int32:
-		h.i64 = uint64(value.(int32))
-		h.str = strconv.Itoa(int(value.(int32)))
+		h.i64 = uint64(v)
+		h.str = strconv.Itoa(int(v))
 	case int64:
-		h.i64 = uint64(value.(int64))
-		h.str = strconv.Itoa(int(value.(int64)))
+		h.i64 = uint64(v)
+		h.str = strconv.Itoa(int(v))
 	case uint:
-		h.i64 = uint64(value.(uint))
-		h.str = strconv.FormatUint(uint64(value.(uint)), 10)
+		h.i64 = uint64(v)
+		h.str = strconv.FormatUint(uint64(v), 10)
 	case uint8:
-		h.i64 = uint64(value.(uint8))
-		h.str = strconv.FormatUint(uint64(value.(uint8)), 10)
+		h.i64 = uint64(v)
+		h.str = strconv.FormatUint(uint64(v), 10)
 	case uint16:
-		h.i64 = uint64(value.(uint16))
-		h.str = strconv.FormatUint(uint64(value.(uint16)), 10)
+		h.i64 = uint64(v)
+		h.str = strconv.FormatUint(uint64(v), 10)
 	case uint32:
-		h.i64 = uint64(value.(uint32))
-		h.str = strconv.FormatUint(uint64(value.(uint32)), 10)
+		h.i64 = uint64(v)
+		h.str = strconv.FormatUint(uint64(v), 10)
 	case uint64:
-		h.i64 = value.(uint64)
-		h.str = strconv.FormatUint(uint64(value.(uint64)), 10)
+		h.i64 = v
+		h.str = strconv.FormatUint(uint64(v), 10)
 	case bool:
 		h.i64 = 0
 		h.str = "false"
-		if value.(bool) {
+		if v {
 			h.i64 = 1
 			h.str = "true"
 		}
 	case *hashvalue:
-		return value.(*hashvalue)
+		return v
 	case float32, float64:
 		h.str = fmt.Sprint(value)
+	case []byte:
+		b := make([]byte, len(v))
+		copy(b, v)
+		h.str = Bytes2str(b)
+		h.i = b
 	default:
-
+		h.str = fmt.Sprint(v)
 	}
 	//h.b = jsoniter.Marshal(i)
 	return h
@@ -318,42 +323,42 @@ func (this *Hashvalue) Store(key string, value interface{}) {
 	result, ok := this.value.Load(key)
 
 	if ok {
-
-		switch value.(type) {
+		result.(*hashvalue).i = value
+		switch v := value.(type) {
 		case string:
-			result.(*hashvalue).str = value.(string)
-			i, _ := strconv.Atoi(value.(string))
+			result.(*hashvalue).str = v
+			i, _ := strconv.Atoi(v)
 			result.(*hashvalue).i64 = uint64(i)
 		case int:
-			result.(*hashvalue).i64 = uint64(value.(int))
-			result.(*hashvalue).str = strconv.Itoa(int(value.(int)))
+			result.(*hashvalue).i64 = uint64(v)
+			result.(*hashvalue).str = strconv.Itoa(int(v))
 		case int8:
-			result.(*hashvalue).i64 = uint64(value.(int8))
-			result.(*hashvalue).str = strconv.Itoa(int(value.(int8)))
+			result.(*hashvalue).i64 = uint64(v)
+			result.(*hashvalue).str = strconv.Itoa(int(v))
 		case int16:
-			result.(*hashvalue).i64 = uint64(value.(int16))
-			result.(*hashvalue).str = strconv.Itoa(int(value.(int16)))
+			result.(*hashvalue).i64 = uint64(v)
+			result.(*hashvalue).str = strconv.Itoa(int(v))
 		case int32:
-			result.(*hashvalue).i64 = uint64(value.(int32))
-			result.(*hashvalue).str = strconv.Itoa(int(value.(int32)))
+			result.(*hashvalue).i64 = uint64(v)
+			result.(*hashvalue).str = strconv.Itoa(int(v))
 		case int64:
-			result.(*hashvalue).i64 = uint64(value.(int64))
-			result.(*hashvalue).str = strconv.Itoa(int(value.(int64)))
+			result.(*hashvalue).i64 = uint64(v)
+			result.(*hashvalue).str = strconv.Itoa(int(v))
 		case uint:
-			result.(*hashvalue).i64 = uint64(value.(uint))
-			result.(*hashvalue).str = strconv.FormatUint(uint64(value.(uint)), 10)
+			result.(*hashvalue).i64 = uint64(v)
+			result.(*hashvalue).str = strconv.FormatUint(uint64(v), 10)
 		case uint8:
-			result.(*hashvalue).i64 = uint64(value.(uint8))
-			result.(*hashvalue).str = strconv.FormatUint(uint64(value.(uint8)), 10)
+			result.(*hashvalue).i64 = uint64(v)
+			result.(*hashvalue).str = strconv.FormatUint(uint64(v), 10)
 		case uint16:
-			result.(*hashvalue).i64 = uint64(value.(uint16))
-			result.(*hashvalue).str = strconv.FormatUint(uint64(value.(uint16)), 10)
+			result.(*hashvalue).i64 = uint64(v)
+			result.(*hashvalue).str = strconv.FormatUint(uint64(v), 10)
 		case uint32:
-			result.(*hashvalue).i64 = uint64(value.(uint32))
-			result.(*hashvalue).str = strconv.FormatUint(uint64(value.(uint32)), 10)
+			result.(*hashvalue).i64 = uint64(v)
+			result.(*hashvalue).str = strconv.FormatUint(uint64(v), 10)
 		case uint64:
-			result.(*hashvalue).i64 = value.(uint64)
-			result.(*hashvalue).str = strconv.FormatUint(uint64(value.(uint64)), 10)
+			result.(*hashvalue).i64 = v
+			result.(*hashvalue).str = strconv.FormatUint(uint64(v), 10)
 		case bool:
 			result.(*hashvalue).i64 = 0
 			result.(*hashvalue).str = "false"
@@ -365,10 +370,17 @@ func (this *Hashvalue) Store(key string, value interface{}) {
 			this.value.Store(key, value)
 			this.update = true
 			return
+		case []byte:
+			b := make([]byte, len(v))
+			copy(b, v)
+			result.(*hashvalue).str = Bytes2str(b)
+			result.(*hashvalue).i = b
 		case float32, float64:
 			result.(*hashvalue).str = fmt.Sprint(value)
+		default:
+			result.(*hashvalue).str = fmt.Sprint(v)
 		}
-		result.(*hashvalue).i = value
+
 	} else {
 		write := new(sync.Map)
 		write.Store(key, new_hashvalue(value))
@@ -1103,11 +1115,13 @@ func init_unserialize_func() {
 	unserialize_func[serialize_byte] = func(bin []byte) (*hashvalue, error) {
 		val := &hashvalue{i: bin}
 		val.typ = "[]byte"
+		val.str = Bytes2str(bin)
 		return val, nil
 	}
 	unserialize_func[serialize_default] = func(bin []byte) (*hashvalue, error) {
 		val := &hashvalue{i: bin}
 		val.typ = "[]byte"
+		val.str = Bytes2str(bin)
 		return val, nil
 	}
 	unserialize_func[serialize_nil] = func(bin []byte) (*hashvalue, error) {
