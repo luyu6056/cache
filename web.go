@@ -2,6 +2,7 @@ package cache
 
 import (
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,21 +14,38 @@ func StartWebServer(ipPort string) {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		now := time.Now()
 		buf := NewBuffer(4096)
+		var pathlist cacheSort
 		hashcache.Range(func(key, path_i interface{}) bool {
 			pathname := key.(string)
-			path := path_i.(*sync.Map)
+			pathlist = append(pathlist, kv{pathname, path_i})
+			return true
+		})
+		sort.Sort(pathlist)
+		for _, v := range pathlist {
+			pathname := v.key
+			path := v.v.(*sync.Map)
 			bg := 0
+			var cachelist cacheSort
 			path.Range(func(k, i interface{}) bool {
 				key := k.(string)
-				c := i.(*Hashvalue)
+				cachelist = append(cachelist, kv{key, i})
+				return true
+			})
+			sort.Sort(cachelist)
+			for _, v := range cachelist {
+				key := v.key
+				c := v.v.(*Hashvalue)
 				num := 0
 				bg++
+				var valuelist cacheSort
 				c.value.Range(func(k, i interface{}) bool {
 					num++
+					valuelist = append(valuelist, kv{k.(string), i})
 					return true
 				})
 				n := 0
-				c.value.Range(func(name, i interface{}) bool {
+				sort.Sort(valuelist)
+				for _, v := range valuelist {
 					n++
 					class := ""
 					if bg%2 == 0 {
@@ -46,13 +64,13 @@ func StartWebServer(ipPort string) {
 					}
 
 					buf.WriteString("<td class=\"" + class + "\">")
-					buf.WriteString(name.(string))
+					buf.WriteString(v.key)
 					buf.WriteString("</td>")
 					buf.WriteString("<td class=\"" + class + "\">")
-					buf.WriteString(i.(*hashvalue).typ)
+					buf.WriteString(v.v.(*hashvalue).typ)
 					buf.WriteString("</td>")
-					buf.WriteString("<td class=\"" + class + "\" style=\"overflow:hidden;white-space:nowrap;\" title=\"" + strings.ReplaceAll(i.(*hashvalue).str, `"`, `&quot;`) + "\">")
-					buf.WriteString(i.(*hashvalue).str)
+					buf.WriteString("<td class=\"" + class + "\" style=\"overflow:hidden;white-space:nowrap;\" title=\"" + strings.ReplaceAll(v.v.(*hashvalue).str, `"`, `&quot;`) + "\">")
+					buf.WriteString(v.v.(*hashvalue).str)
 					buf.WriteString("</td>")
 					if n == 1 {
 						buf.WriteString("<td class=\"" + class + "\" rowspan=" + strconv.Itoa(num))
@@ -69,12 +87,12 @@ func StartWebServer(ipPort string) {
 					}
 					buf.WriteString("</td>")
 					buf.WriteString("</tr>")
-					return true
-				})
-				return true
-			})
-			return true
-		})
+
+				}
+			}
+
+		}
+
 		w.Write([]byte(`<!DOCTYPE html>
 <html>
 	<head>
@@ -153,3 +171,24 @@ table{table-layout:fixed;word-break:break-all;}
 	line-height: 20px;
 }`
 )
+
+type kv struct {
+	key string
+	v   interface{}
+}
+type cacheSort []kv
+
+func (l cacheSort) Len() int {
+	return len(l)
+}
+func (l cacheSort) Less(i, j int) bool {
+	numi, erri := strconv.Atoi(l[i].key)
+	numj, errj := strconv.Atoi(l[j].key)
+	if erri == nil && errj == nil {
+		return numi < numj
+	}
+	return l[i].key < l[j].key
+}
+func (l cacheSort) Swap(i, j int) {
+	l[i], l[j] = l[j], l[i]
+}

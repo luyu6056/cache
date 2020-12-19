@@ -8,6 +8,7 @@ import (
 	"hash/crc32"
 	"io"
 	"io/ioutil"
+	"log"
 	"math"
 	"os"
 	"reflect"
@@ -17,6 +18,8 @@ import (
 	"sync"
 	"time"
 	"unsafe"
+
+	"encoding/gob"
 
 	jsoniter "github.com/json-iterator/go"
 	"github.com/klauspost/compress/gzip"
@@ -190,7 +193,7 @@ func (this *Hashvalue) Get(key string, value interface{}) bool {
 		reflect.ValueOf(value).Elem().Set(reflect.ValueOf(res.i))
 	} else {
 		if b, ok := res.i.([]byte); ok {
-			err := jsoniter.Unmarshal(b, value)
+			err := Deserialize(b, value)
 			if err == nil {
 				res.i = reflect.ValueOf(value).Elem().Interface()
 				res.typ = r.String()
@@ -2041,4 +2044,31 @@ func PathExists(path string) (bool, error) {
 		return false, nil
 	}
 	return false, err
+}
+
+func Serialize(i interface{}) []byte {
+	// 声明一个字节缓冲区
+	var buffer = NewBuffer(4096)
+	// 构造一个编码器
+	encoder := gob.NewEncoder(&buffer)
+	// 进行序列化
+	err := encoder.Encode(i)
+	if err != nil {
+		log.Println(err.Error())
+		return nil
+	}
+	return buffer.Bytes()
+}
+
+func Deserialize(buffer []byte, i interface{}) error {
+	buf := &MsgBuffer{}
+	buf.Resetbuf(buffer)
+	decoder := gob.NewDecoder(buf)
+	// 进行反序列化
+	err := decoder.Decode(i)
+	if err != nil {
+		//log.Println("ERROR!")
+		//return nil
+	}
+	return err
 }
