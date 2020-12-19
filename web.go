@@ -20,11 +20,11 @@ func StartWebServer(ipPort string) {
 			pathlist = append(pathlist, kv{pathname, path_i})
 			return true
 		})
+		bg := 0
 		sort.Sort(pathlist)
 		for _, v := range pathlist {
 			pathname := v.key
 			path := v.v.(*sync.Map)
-			bg := 0
 			var cachelist cacheSort
 			path.Range(func(k, i interface{}) bool {
 				key := k.(string)
