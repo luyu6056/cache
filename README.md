@@ -4,6 +4,12 @@
 3. 支持多种格式直接保存读取，string,bool,int-int64,uint-uint64,nil,float32,float64,[]byte，其他格式使用json反序列化获取
 
 # 使用说明
+## StartWebServer(ipPort)
+开启web监控页面，方便查看当前缓存内存
+```go
+  cache.StartWebServer("0.0.0.0:8080")
+```
+
 ## Hset(name,value path,expire)
 
 * value支持一下三个格式，会转化为string的key与interface{}的value
