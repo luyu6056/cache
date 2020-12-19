@@ -21,7 +21,6 @@ import (
 
 	"encoding/gob"
 
-	jsoniter "github.com/json-iterator/go"
 	"github.com/klauspost/compress/gzip"
 	//"unsafe"
 	//"strings"
@@ -961,7 +960,7 @@ func serialize(vv *hashvalue) ([]byte, bool) {
 		buf.Write(Crc32_check(nil))
 		buf.Write(nil)
 	default:
-		data, _ := jsoniter.Marshal(vv.i)
+		data := Serialize(vv.i)
 		buf.WriteByte(serialize_default)
 		buf.Write(Crc32_check(data))
 		buf.Write(data)
@@ -2050,7 +2049,7 @@ func Serialize(i interface{}) []byte {
 	// 声明一个字节缓冲区
 	var buffer = NewBuffer(4096)
 	// 构造一个编码器
-	encoder := gob.NewEncoder(&buffer)
+	encoder := gob.NewEncoder(buffer)
 	// 进行序列化
 	err := encoder.Encode(i)
 	if err != nil {
@@ -2062,7 +2061,7 @@ func Serialize(i interface{}) []byte {
 
 func Deserialize(buffer []byte, i interface{}) error {
 	buf := &MsgBuffer{}
-	buf.Resetbuf(buffer)
+	buf.ResetBuf(buffer)
 	decoder := gob.NewDecoder(buf)
 	// 进行反序列化
 	err := decoder.Decode(i)
