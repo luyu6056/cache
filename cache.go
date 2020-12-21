@@ -8,7 +8,6 @@ import (
 	"hash/crc32"
 	"io"
 	"io/ioutil"
-	"log"
 	"math"
 	"os"
 	"reflect"
@@ -19,7 +18,7 @@ import (
 	"time"
 	"unsafe"
 
-	"encoding/gob"
+	"github.com/vmihailenco/msgpack/v5"
 
 	"github.com/klauspost/compress/gzip"
 	//"unsafe"
@@ -192,7 +191,7 @@ func (this *Hashvalue) Get(key string, value interface{}) bool {
 		reflect.ValueOf(value).Elem().Set(reflect.ValueOf(res.i))
 	} else {
 		if b, ok := res.i.([]byte); ok {
-			err := Deserialize(b, value)
+			err := msgpack.Unmarshal(b, value)
 			if err == nil {
 				res.i = reflect.ValueOf(value).Elem().Interface()
 				res.typ = r.String()
@@ -960,7 +959,7 @@ func serialize(vv *hashvalue) ([]byte, bool) {
 		buf.Write(Crc32_check(nil))
 		buf.Write(nil)
 	default:
-		data := Serialize(vv.i)
+		data, _ := msgpack.Marshal(vv.i)
 		buf.WriteByte(serialize_default)
 		buf.Write(Crc32_check(data))
 		buf.Write(data)
@@ -2043,31 +2042,4 @@ func PathExists(path string) (bool, error) {
 		return false, nil
 	}
 	return false, err
-}
-
-func Serialize(i interface{}) []byte {
-	// 声明一个字节缓冲区
-	var buffer = NewBuffer(4096)
-	// 构造一个编码器
-	encoder := gob.NewEncoder(buffer)
-	// 进行序列化
-	err := encoder.Encode(i)
-	if err != nil {
-		log.Println(err.Error())
-		return nil
-	}
-	return buffer.Bytes()
-}
-
-func Deserialize(buffer []byte, i interface{}) error {
-	buf := &MsgBuffer{}
-	buf.ResetBuf(buffer)
-	decoder := gob.NewDecoder(buf)
-	// 进行反序列化
-	err := decoder.Decode(i)
-	if err != nil {
-		//log.Println("ERROR!")
-		//return nil
-	}
-	return err
 }
