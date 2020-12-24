@@ -15,6 +15,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -288,12 +289,22 @@ func (this *Hashvalue) Load_float32(key string) float32 {
 	f, _ := strconv.ParseFloat(result.(*hashvalue).str, 32)
 	return float32(f)
 }
-func (this *Hashvalue) Load_bool(key interface{}) bool {
+func (this *Hashvalue) Load_bool(key string) bool {
 	result, ok := this.value.Load(key)
 	if !ok {
 		return false
 	}
 	return result.(*hashvalue).i64 == 1
+}
+func (this *Hashvalue) INCRBY(key string, add int64) {
+	result, ok := this.value.Load(key)
+	if !ok {
+		this.Set(key, add)
+		return
+	}
+	this.Set(key, atomic.AddUint64(&result.(*hashvalue).i64, uint64(add)))
+	return
+
 }
 func (this *Hashvalue) Len() (length int) {
 	this.value.Range(func(k, v interface{}) bool {

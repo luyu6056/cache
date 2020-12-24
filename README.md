@@ -140,3 +140,8 @@
   _hset.Delete("temp")
 ```
 
+## _hset.INCRBY(key,add)
+对某个key的值进行进行加减，类型为int64，负值为减，正值为增加
+```go
+  _hset.INCRBY("uid",1)
+```
