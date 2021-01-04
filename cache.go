@@ -296,14 +296,15 @@ func (this *Hashvalue) Load_bool(key string) bool {
 	}
 	return result.(*hashvalue).i64 == 1
 }
-func (this *Hashvalue) INCRBY(key string, add int64) {
+func (this *Hashvalue) INCRBY(key string, add int64) int64 {
 	result, ok := this.value.Load(key)
 	if !ok {
 		this.Set(key, add)
-		return
+		return add
 	}
-	this.Set(key, atomic.AddUint64(&result.(*hashvalue).i64, uint64(add)))
-	return
+	v := atomic.AddUint64(&result.(*hashvalue).i64, uint64(add))
+	this.Set(key, v)
+	return int64(v)
 
 }
 func (this *Hashvalue) Len() (length int) {
