@@ -191,6 +191,7 @@ func (this *Hashvalue) Get(key string, value interface{}) bool {
 	if r.String() == res.typ {
 		reflect.ValueOf(value).Elem().Set(reflect.ValueOf(res.i))
 	} else {
+
 		if b, ok := res.i.([]byte); ok {
 			err := msgpack.Unmarshal(b, value)
 			if err == nil {
@@ -380,7 +381,17 @@ func (this *Hashvalue) Store(key string, value interface{}) {
 				result.(*hashvalue).str = "true"
 			}
 		case *hashvalue:
-			this.value.Store(key, value)
+			if w_v, ok := this.writevalue.value.LoadOrStore(key, v); ok {
+				if w_v.(*hashvalue).typ != v.typ || w_v.(*hashvalue).str != v.str {
+					this.writevalue.value.Store(key, v)
+
+				}
+			}
+			if v_v, ok := this.value.LoadOrStore(key, v); ok {
+				if v_v.(*hashvalue).typ != v.typ || v_v.(*hashvalue).str != v.str {
+					this.value.Store(key, v)
+				}
+			}
 			this.update = true
 			return
 		case []byte:
@@ -393,9 +404,10 @@ func (this *Hashvalue) Store(key string, value interface{}) {
 		default:
 			result.(*hashvalue).str = fmt.Sprint(v)
 		}
-
+		result.(*hashvalue).typ = reflect.TypeOf(value).String()
 	} else {
 		write := new(sync.Map)
+
 		write.Store(key, new_hashvalue(value))
 		this.do_hash(write, expire_keep, "")
 		this = Hget(this.writevalue.name, this.writevalue.path)
@@ -508,6 +520,7 @@ func (this *Hashvalue) do_hash(value_i interface{}, expire int64, t string) bool
 	//对原始缓存进行更新
 	if value != nil {
 		value.Range(func(k, v interface{}) bool {
+
 			if w_v, ok := this.writevalue.value.LoadOrStore(k, v); ok {
 				if w_v.(*hashvalue).typ != v.(*hashvalue).typ || w_v.(*hashvalue).str != v.(*hashvalue).str {
 					this.writevalue.value.Store(k, v)
@@ -521,7 +534,6 @@ func (this *Hashvalue) do_hash(value_i interface{}, expire int64, t string) bool
 					this.value.Store(k, v)
 				}
 			}
-
 			return true
 		})
 	}
@@ -556,7 +568,6 @@ func (this *Hashvalue) do_hash(value_i interface{}, expire int64, t string) bool
 	}
 	//赋值，写入持久化
 	this.writevalue.expire = expire
-
 	switch t {
 	case "":
 		path_v.Store(this.writevalue.name, this)
@@ -704,12 +715,12 @@ func write_file_func(write map[string]map[string]*writeHash, f *os.File) {
 			b1.Reset()
 			b2.Reset()
 			val.value.Range(func(k1, v1 interface{}) bool {
-				switch v1.(type) {
+				/*switch v1.(type) {
 				case *hashvalue:
 				default:
 					DEBUG(k1)
 					Log("%+v", k1)
-				}
+				}*/
 				write_string, ok := serialize(v1.(*hashvalue))
 				if ok {
 					b := []byte(k1.(string))
@@ -1128,7 +1139,7 @@ func init_unserialize_func() {
 	unserialize_func[serialize_byte] = func(bin []byte) (*hashvalue, error) {
 		val := &hashvalue{i: bin}
 		val.typ = "[]byte"
-		val.str = Bytes2str(bin)
+		//val.str = Bytes2str(bin)
 		return val, nil
 	}
 	unserialize_func[serialize_default] = func(bin []byte) (*hashvalue, error) {
@@ -1338,10 +1349,12 @@ func makehashfromfile(file string, is_main bool) bool {
 			kk := string(b1.Next(int(l)))
 			v32 = 0
 			binary.Read(b1, binary.LittleEndian, &v32)
+
 			r_v, err := unserialize(b1.Next(int(v32)))
 
 			if err == nil && err1 == nil {
-				va.Store(kk, r_v)
+				va.value.Store(kk, r_v)
+
 			} else if err.Error() == "delete" {
 				va.Delete(kk)
 			} else {
@@ -1364,6 +1377,7 @@ func makehashfromfile(file string, is_main bool) bool {
 				hashdelete.Store(t, []map[string]string{map[string]string{"name": va.writevalue.name, "path": va.writevalue.path}})
 			}
 		}
+
 		path_i, _ := hashcache.Load(path)
 		path_i.(*sync.Map).Store(key, va)
 		continue
@@ -1477,7 +1491,7 @@ func syncHash(value []*writeHash) {
 		write[v.path][v.name].expire = v.expire
 	}
 	if len(write) > 0 {
-		go hash_write(write)
+		hash_write(write)
 	}
 
 }
