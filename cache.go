@@ -189,19 +189,36 @@ func (this *Hashvalue) Get(key string, value interface{}) bool {
 	//DEBUG(key, r.String(), res.tpy, res.b)
 	r = r.Elem()
 	if r.String() == res.typ {
-		reflect.ValueOf(value).Elem().Set(reflect.ValueOf(res.i))
-	} else {
-
-		if b, ok := res.i.([]byte); ok {
-			err := msgpack.Unmarshal(b, value)
-			if err == nil {
-				res.i = reflect.ValueOf(value).Elem().Interface()
-				res.typ = r.String()
-			} else {
-				DEBUG(err, this.writevalue.name, this.writevalue.path)
+		switch r.Kind() {
+		case reflect.Int, reflect.Bool, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Float32, reflect.Float64:
+			reflect.ValueOf(value).Elem().Set(reflect.ValueOf(res.i))
+			return true
+		case reflect.String:
+			reflect.ValueOf(value).Elem().SetString(res.i.(string))
+			return true
+		case reflect.Slice:
+			if r.Elem().Kind() == reflect.Uint8 { //[]byte
+				src := reflect.ValueOf(res.i)
+				newSlice := reflect.MakeSlice(src.Type(), src.Len(), src.Len())
+				reflect.Copy(newSlice, src)
+				reflect.ValueOf(value).Elem().Set(newSlice)
+				return true
 			}
+		case reflect.Chan:
+			reflect.ValueOf(value).Elem().Set(reflect.ValueOf(res.i))
+			return true
 		}
 
+	}
+
+	if b, ok := res.i.([]byte); ok {
+		err := msgpack.Unmarshal(b, value)
+		if err == nil {
+			res.i = reflect.ValueOf(value).Elem().Interface()
+			res.typ = r.String()
+		} else {
+			DEBUG(err, this.writevalue.name, this.writevalue.path)
+		}
 	}
 
 	return true
