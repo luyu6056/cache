@@ -155,7 +155,7 @@ func new_hashvalue(value interface{}) *hashvalue {
 		//checkKind(t)
 		h.str = fmt.Sprint(v)
 	}
-	h.b, _ = msgpack.Marshal(v)
+	h.b, _ = msgpack.Marshal(value)
 	//h.b = jsoniter.Marshal(i)
 	return h
 }
