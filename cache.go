@@ -88,7 +88,7 @@ const (
 )
 
 type hashvalue struct {
-	//b   []byte //原始值
+	b   []byte //序列化过后的值
 	i   interface{}
 	typ string //缓存的类型
 	str string //普通字串解析
@@ -98,7 +98,8 @@ type hashvalue struct {
 func new_hashvalue(value interface{}) *hashvalue {
 	h := new(hashvalue)
 	h.i = value
-	h.typ = reflect.TypeOf(value).String()
+	t := reflect.TypeOf(value)
+	h.typ = t.String()
 	switch v := value.(type) {
 	case string:
 		h.str = v
@@ -151,10 +152,28 @@ func new_hashvalue(value interface{}) *hashvalue {
 		h.str = Bytes2str(b)
 		h.i = b
 	default:
+		//checkKind(t)
 		h.str = fmt.Sprint(v)
 	}
+	h.b, _ = msgpack.Marshal(v)
 	//h.b = jsoniter.Marshal(i)
 	return h
+}
+func checkKind(typ reflect.Type) {
+	for typ.Kind() == reflect.Ptr || typ.Kind() == reflect.Map || typ.Kind() == reflect.Slice {
+		typ = typ.Elem()
+	}
+
+	if typ.Kind() == reflect.Struct {
+		for i := 0; i < typ.NumField(); i++ {
+			checkKind(typ.Field(i).Type)
+		}
+	} else {
+		if typ.Kind() == reflect.Chan || typ.Kind() == reflect.Func {
+			DEBUG("不支持的格式" + typ.Kind().String()) //其他想到的或者后面遇到的类型，再加
+		}
+	}
+
 }
 
 //path层
@@ -164,6 +183,8 @@ func new_hashvalue(value interface{}) *hashvalue {
 	//hot_max     int64
 	//hot_num_max int64
 }*/
+
+//获取从内存中的值
 func (this *Hashvalue) Load(key string) (interface{}, bool) {
 
 	result, ok := this.value.Load(key)
@@ -174,6 +195,7 @@ func (this *Hashvalue) Load(key string) (interface{}, bool) {
 
 }
 
+//尝试从内存中的值,内存中没有值则进行反序列化，修改获取的值可能会影响缓存中的值
 func (this *Hashvalue) Get(key string, value interface{}) bool {
 
 	result, ok := this.value.Load(key)
@@ -186,13 +208,11 @@ func (this *Hashvalue) Get(key string, value interface{}) bool {
 	if r.Kind() != reflect.Ptr {
 		return false
 	}
-	//DEBUG(key, r.String(), res.tpy, res.b)
+
 	r = r.Elem()
 	if r.String() == res.typ {
 		switch r.Kind() {
-		case reflect.Int, reflect.Bool, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Float32, reflect.Float64:
-			reflect.ValueOf(value).Elem().Set(reflect.ValueOf(res.i))
-			return true
+
 		case reflect.String:
 			reflect.ValueOf(value).Elem().SetString(res.i.(string))
 			return true
@@ -204,11 +224,9 @@ func (this *Hashvalue) Get(key string, value interface{}) bool {
 				reflect.ValueOf(value).Elem().Set(newSlice)
 				return true
 			}
-		case reflect.Chan:
-			reflect.ValueOf(value).Elem().Set(reflect.ValueOf(res.i))
-			return true
-		}
 
+		}
+		reflect.ValueOf(value).Elem().Set(reflect.ValueOf(res.i))
 	}
 
 	if b, ok := res.i.([]byte); ok {
@@ -219,8 +237,35 @@ func (this *Hashvalue) Get(key string, value interface{}) bool {
 		} else {
 			DEBUG(err, this.writevalue.name, this.writevalue.path)
 		}
+		return true
 	}
 
+	return false
+}
+
+//从原始[]byte中进行反序列化，修改返回结果不影响缓存
+func (this *Hashvalue) Unmarshal(key string, value interface{}) bool {
+	result, ok := this.value.Load(key)
+	if !ok {
+		return false
+	}
+	res := result.(*hashvalue)
+	r := reflect.TypeOf(value)
+	if r.Kind() != reflect.Ptr {
+		return false
+	}
+	r = r.Elem()
+	if r.Kind() == reflect.Slice && r.Elem().Kind() == reflect.Uint8 { //针对[]byte进行特殊处理
+		src := reflect.ValueOf(res.b)
+		newSlice := reflect.MakeSlice(src.Type(), src.Len(), src.Len())
+		reflect.Copy(newSlice, src)
+		reflect.ValueOf(value).Elem().Set(newSlice)
+		return true
+	}
+	err := msgpack.Unmarshal(res.b, value)
+	if err != nil {
+		return false
+	}
 	return true
 }
 
@@ -355,6 +400,11 @@ func (this *Hashvalue) Store(key string, value interface{}) {
 
 	if ok {
 		result.(*hashvalue).i = value
+		if b, ok := value.([]byte); ok {
+			result.(*hashvalue).b = b
+		} else {
+			result.(*hashvalue).b, _ = msgpack.Marshal(value)
+		}
 		switch v := value.(type) {
 		case string:
 			result.(*hashvalue).str = v
@@ -999,10 +1049,10 @@ func serialize(vv *hashvalue) ([]byte, bool) {
 		buf.Write(Crc32_check(nil))
 		buf.Write(nil)
 	default:
-		data, _ := msgpack.Marshal(vv.i)
+
 		buf.WriteByte(serialize_default)
-		buf.Write(Crc32_check(data))
-		buf.Write(data)
+		buf.Write(Crc32_check(vv.b))
+		buf.Write(vv.b)
 		out := make([]byte, buf.Len())
 		copy(out, buf.Bytes())
 		return out, true
@@ -1040,6 +1090,7 @@ func init_unserialize_func() {
 		val.i = val.str
 		i, _ := strconv.Atoi(val.str)
 		val.i64 = uint64(i)
+		val.b, _ = msgpack.Marshal(val.i)
 		return val, nil
 	}
 	unserialize_func[serialize_bool] = func(bin []byte) (*hashvalue, error) {
@@ -1052,7 +1103,7 @@ func init_unserialize_func() {
 			val.str = "true"
 			val.i = true
 		}
-
+		val.b, _ = msgpack.Marshal(val.i)
 		return val, nil
 	}
 	unserialize_func[serialize_int] = func(bin []byte) (*hashvalue, error) {
@@ -1061,6 +1112,7 @@ func init_unserialize_func() {
 		val.i64 = binary.LittleEndian.Uint64(bin)
 		val.str = strconv.Itoa(int(val.i64))
 		val.i = int(val.i64)
+		val.b, _ = msgpack.Marshal(val.i)
 		return val, nil
 	}
 	unserialize_func[serialize_int8] = func(bin []byte) (*hashvalue, error) {
@@ -1069,6 +1121,7 @@ func init_unserialize_func() {
 		val.i64 = uint64(bin[0])
 		val.str = strconv.Itoa(int(val.i64))
 		val.i = int8(val.i64)
+		val.b, _ = msgpack.Marshal(val.i)
 		return val, nil
 	}
 	unserialize_func[serialize_int16] = func(bin []byte) (*hashvalue, error) {
@@ -1077,6 +1130,7 @@ func init_unserialize_func() {
 		val.i64 = uint64(binary.LittleEndian.Uint16(bin))
 		val.str = strconv.Itoa(int(val.i64))
 		val.i = int16(val.i64)
+		val.b, _ = msgpack.Marshal(val.i)
 		return val, nil
 	}
 	unserialize_func[serialize_int32] = func(bin []byte) (*hashvalue, error) {
@@ -1085,6 +1139,7 @@ func init_unserialize_func() {
 		val.i64 = uint64(binary.LittleEndian.Uint32(bin))
 		val.str = strconv.Itoa(int(val.i64))
 		val.i = int32(val.i64)
+		val.b, _ = msgpack.Marshal(val.i)
 		return val, nil
 
 	}
@@ -1094,6 +1149,7 @@ func init_unserialize_func() {
 		val.i64 = binary.LittleEndian.Uint64(bin)
 		val.str = strconv.Itoa(int(val.i64))
 		val.i = int64(val.i64)
+		val.b, _ = msgpack.Marshal(val.i)
 		return val, nil
 	}
 	unserialize_func[serialize_uint] = func(bin []byte) (*hashvalue, error) {
@@ -1102,6 +1158,7 @@ func init_unserialize_func() {
 		val.i64 = binary.LittleEndian.Uint64(bin)
 		val.str = strconv.FormatUint(val.i64, 10)
 		val.i = uint(val.i64)
+		val.b, _ = msgpack.Marshal(val.i)
 		return val, nil
 	}
 	unserialize_func[serialize_uint8] = func(bin []byte) (*hashvalue, error) {
@@ -1110,6 +1167,7 @@ func init_unserialize_func() {
 		val.i64 = uint64(bin[0])
 		val.str = strconv.FormatUint(val.i64, 10)
 		val.i = uint8(val.i64)
+		val.b, _ = msgpack.Marshal(val.i)
 		return val, nil
 	}
 	unserialize_func[serialize_uint16] = func(bin []byte) (*hashvalue, error) {
@@ -1118,6 +1176,7 @@ func init_unserialize_func() {
 		val.i64 = uint64(binary.LittleEndian.Uint16(bin))
 		val.str = strconv.FormatUint(val.i64, 10)
 		val.i = uint16(val.i64)
+		val.b, _ = msgpack.Marshal(val.i)
 		return val, nil
 	}
 	unserialize_func[serialize_uint32] = func(bin []byte) (*hashvalue, error) {
@@ -1126,6 +1185,7 @@ func init_unserialize_func() {
 		val.i64 = uint64(binary.LittleEndian.Uint32(bin))
 		val.str = strconv.FormatUint(val.i64, 10)
 		val.i = uint32(val.i64)
+		val.b, _ = msgpack.Marshal(val.i)
 		return val, nil
 	}
 	unserialize_func[serialize_uint64] = func(bin []byte) (*hashvalue, error) {
@@ -1134,6 +1194,7 @@ func init_unserialize_func() {
 		val.i64 = binary.LittleEndian.Uint64(bin)
 		val.str = strconv.FormatUint(val.i64, 10)
 		val.i = uint64(val.i64)
+		val.b, _ = msgpack.Marshal(val.i)
 		return val, nil
 
 	}
@@ -1143,6 +1204,7 @@ func init_unserialize_func() {
 		f := math.Float32frombits(binary.LittleEndian.Uint32(bin))
 		val.str = fmt.Sprint(f)
 		val.i = f
+		val.b, _ = msgpack.Marshal(val.i)
 		return val, nil
 	}
 	unserialize_func[serialize_f64] = func(bin []byte) (*hashvalue, error) {
@@ -1151,23 +1213,29 @@ func init_unserialize_func() {
 		f := math.Float64frombits(binary.LittleEndian.Uint64(bin))
 		val.str = fmt.Sprint(f)
 		val.i = f
+		val.b, _ = msgpack.Marshal(val.i)
 		return val, nil
 	}
 	unserialize_func[serialize_byte] = func(bin []byte) (*hashvalue, error) {
 		val := &hashvalue{i: bin}
 		val.typ = "[]byte"
 		//val.str = Bytes2str(bin)
+		val.b = make([]byte, len(bin))
+		copy(val.b, bin)
 		return val, nil
 	}
 	unserialize_func[serialize_default] = func(bin []byte) (*hashvalue, error) {
 		val := &hashvalue{i: bin}
 		val.typ = "[]byte"
 		val.str = Bytes2str(bin)
+		val.b = make([]byte, len(bin))
+		copy(val.b, bin)
 		return val, nil
 	}
 	unserialize_func[serialize_nil] = func(bin []byte) (*hashvalue, error) {
 		val := &hashvalue{}
 		val.typ = "nil"
+		val.b, _ = msgpack.Marshal(val.i)
 		return val, nil
 	}
 	unserialize_func[serialize_delete] = func(bin []byte) (*hashvalue, error) {
