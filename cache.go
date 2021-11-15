@@ -953,7 +953,7 @@ func serialize(vv *hashvalue) ([]byte, bool) {
 		buf.Write(Crc32_check(nil))
 		buf.Write(nil)
 	default:
-		data, _ := msgpack.Marshal(vv.i)
+		data := vv.i.([]byte)
 		buf.WriteByte(serialize_default)
 		buf.Write(Crc32_check(data))
 		buf.Write(data)
