@@ -36,14 +36,16 @@ var cachebufpool = sync.Pool{
 const (
 	CACHE_FILE_NAME = "db.cache" //持久化储存的文件名
 	CACHE_Path      = "./cache"
-	ISDEBUG         = true       //是否fmt打印错误
-	SAVE_TIME       = 1          //持久化间隔时间,单位秒
-	GZIP_LIMIT      = 4096       //大于这个尺寸就压缩
-	MAXLEN          = 1073741824 //128M 缓存单条消息大于这个尺寸就抛弃
-	GZIP_LEVEL      = 6          //压缩等级
+
+	SAVE_TIME  = 1          //持久化间隔时间,单位秒
+	GZIP_LIMIT = 4096       //大于这个尺寸就压缩
+	MAXLEN     = 1073741824 //128M 缓存单条消息大于这个尺寸就抛弃
+	GZIP_LEVEL = 6          //压缩等级
 )
 
 var (
+	ISDEBUG          = true                                                                                     //是否fmt打印错误
+	NoPersistence    = false                                                                                    //true则对所有缓存不持久化写入
 	hashcache        sync.Map                                                                                   //储存变量
 	hashcache_q      []*writeHash                                                                               //写入队列 5000定长
 	hashcache_q_m    sync.Map                                                                                   //写入队列的map
@@ -89,10 +91,11 @@ const (
 
 type hashvalue struct {
 	//b   []byte //原始值
-	i   interface{}
-	typ string //缓存的类型
-	str string //普通字串解析
-	i64 uint64
+	i             interface{}
+	typ           string //缓存的类型
+	str           string //普通字串解析
+	i64           uint64
+	noPersistence bool //store不写入持久化
 }
 
 func new_hashvalue(value interface{}, _h *hashvalue) *hashvalue {
@@ -102,43 +105,54 @@ func new_hashvalue(value interface{}, _h *hashvalue) *hashvalue {
 	} else {
 		h = new(hashvalue)
 	}
-	h.i = value
+
 	h.typ = reflect.TypeOf(value).String()
 	switch v := value.(type) {
 	case string:
 		h.str = v
 		i, _ := strconv.Atoi(v)
 		h.i64 = uint64(i)
+		h.i = v
 	case int:
 		h.i64 = uint64(v)
 		h.str = strconv.Itoa(int(v))
+		h.i = v
 	case int8:
 		h.i64 = uint64(v)
 		h.str = strconv.Itoa(int(v))
+		h.i = v
 	case int16:
 		h.i64 = uint64(v)
 		h.str = strconv.Itoa(int(v))
+		h.i = v
 	case int32:
 		h.i64 = uint64(v)
 		h.str = strconv.Itoa(int(v))
+		h.i = v
 	case int64:
 		h.i64 = uint64(v)
 		h.str = strconv.Itoa(int(v))
+		h.i = v
 	case uint:
 		h.i64 = uint64(v)
 		h.str = strconv.FormatUint(uint64(v), 10)
+		h.i = v
 	case uint8:
 		h.i64 = uint64(v)
 		h.str = strconv.FormatUint(uint64(v), 10)
+		h.i = v
 	case uint16:
 		h.i64 = uint64(v)
 		h.str = strconv.FormatUint(uint64(v), 10)
+		h.i = v
 	case uint32:
 		h.i64 = uint64(v)
 		h.str = strconv.FormatUint(uint64(v), 10)
+		h.i = v
 	case uint64:
 		h.i64 = v
 		h.str = strconv.FormatUint(uint64(v), 10)
+		h.i = v
 	case bool:
 		h.i64 = 0
 		h.str = "false"
@@ -146,10 +160,12 @@ func new_hashvalue(value interface{}, _h *hashvalue) *hashvalue {
 			h.i64 = 1
 			h.str = "true"
 		}
+		h.i = v
 	case *hashvalue:
 		return v
 	case float32, float64:
 		h.str = fmt.Sprint(value)
+		h.i = v
 	case []byte:
 		b := make([]byte, len(v))
 		copy(b, v)
@@ -371,15 +387,18 @@ func (this *Hashvalue) Store(key string, value interface{}) {
 					this.value.Store(key, v)
 				}
 			}
+			v.noPersistence = true
 			this.update = true
 			return
 
 		}
 		new_hashvalue(value, result.(*hashvalue))
+		result.(*hashvalue).noPersistence = true
 	} else {
 		write := new(sync.Map)
-
-		write.Store(key, new_hashvalue(value, nil))
+		v := new_hashvalue(value, nil)
+		v.noPersistence = true
+		write.Store(key, v)
 		this.do_hash(write, expire_keep, "")
 		this = Hget(this.writevalue.name, this.writevalue.path)
 	}
@@ -547,7 +566,9 @@ func (this *Hashvalue) do_hash(value_i interface{}, expire int64, t string) bool
 
 		this.update = false
 		//加入写队列
+
 		hash_queue(this.writevalue)
+
 	}
 	return true
 }
@@ -634,6 +655,9 @@ type Hash_file struct {
 }
 
 func hash_write(write map[string]map[string]*writeHash) {
+	if NoPersistence {
+		return
+	}
 	write_lock.Lock()
 	defer write_lock.Unlock()
 
@@ -680,8 +704,8 @@ func write_file_func(write map[string]map[string]*writeHash, f *os.File) {
 	gzip_b.Grow(1024 * 1024)
 	gzip, _ := gzip.NewWriterLevel(gzip_b, GZIP_LEVEL)
 
-	for path, v := range write {
-		for key, val := range v {
+	for _, v := range write {
+		for _, val := range v {
 
 			b1.Reset()
 			b2.Reset()
@@ -692,16 +716,17 @@ func write_file_func(write map[string]map[string]*writeHash, f *os.File) {
 					DEBUG(k1)
 					Log("%+v", k1)
 				}*/
-				write_string, ok := serialize(v1.(*hashvalue))
-				if ok {
-					b := []byte(k1.(string))
-					binary.Write(b2, binary.LittleEndian, uint16(len(b)))
-					b2.Write(b)
-					binary.Write(b2, binary.LittleEndian, uint32(len(write_string)))
-					b2.Write(write_string)
-				} else {
-					DEBUG(path, key, "写入失败")
+				if v1.(*hashvalue).noPersistence { //跳过不持久写入的缓存
+					return true
 				}
+				write_string := serialize(v1.(*hashvalue))
+
+				b := []byte(k1.(string))
+				binary.Write(b2, binary.LittleEndian, uint16(len(b)))
+				b2.Write(b)
+				binary.Write(b2, binary.LittleEndian, uint32(len(write_string)))
+				b2.Write(write_string)
+
 				return true
 			})
 			b := []byte(val.path)
@@ -848,8 +873,7 @@ const (
 	serialize_delete
 )
 
-func serialize(vv *hashvalue) ([]byte, bool) {
-	ok := true
+func serialize(vv *hashvalue) []byte {
 	buf := cachebufpool.Get().(*MsgBuffer)
 	b := cachebufpool.Get().(*MsgBuffer)
 	defer func() {
@@ -861,8 +885,9 @@ func serialize(vv *hashvalue) ([]byte, bool) {
 	switch vv.typ {
 	case "string":
 		buf.WriteByte(serialize_string)
-		buf.Write(Crc32_check([]byte(vv.str)))
-		buf.WriteString(vv.str)
+		tmp := vv.str //以下tmp都是临时转存，避免原始副本被改变，导致crc不对
+		buf.Write(Crc32_check([]byte(tmp)))
+		buf.WriteString(tmp)
 	case "bool":
 		data := "1"
 		if vv.i64 == 0 {
@@ -878,9 +903,10 @@ func serialize(vv *hashvalue) ([]byte, bool) {
 		buf.Write(Crc32_check(tmp))
 		buf.Write(tmp)
 	case "int8":
+		tmp := uint8(vv.i64)
 		buf.WriteByte(serialize_int8)
-		buf.Write(Crc32_check([]byte{uint8(vv.i64)}))
-		buf.WriteByte(uint8(vv.i64))
+		buf.Write(Crc32_check([]byte{tmp}))
+		buf.WriteByte(tmp)
 	case "int16":
 		tmp := b.Make(2)
 		binary.LittleEndian.PutUint16(tmp, uint16(vv.i64))
@@ -906,9 +932,10 @@ func serialize(vv *hashvalue) ([]byte, bool) {
 		buf.Write(Crc32_check(tmp))
 		buf.Write(tmp)
 	case "uint8":
+		tmp := uint8(vv.i64)
 		buf.WriteByte(serialize_uint8)
-		buf.Write(Crc32_check([]byte{uint8(vv.i64)}))
-		buf.WriteByte(uint8(vv.i64))
+		buf.Write(Crc32_check([]byte{tmp}))
+		buf.WriteByte(tmp)
 	case "uint16":
 		tmp := b.Make(2)
 		binary.LittleEndian.PutUint16(tmp, uint16(vv.i64))
@@ -945,26 +972,26 @@ func serialize(vv *hashvalue) ([]byte, bool) {
 		buf.Write(Crc32_check(tmp))
 		buf.Write(tmp)
 	case "[]byte":
+		tmp := vv.i.([]byte)
 		buf.WriteByte(serialize_byte)
-		buf.Write(Crc32_check(vv.i.([]byte)))
-		buf.Write(vv.i.([]byte))
+		buf.Write(Crc32_check(tmp))
+		buf.Write(tmp)
 	case "":
 		buf.WriteByte(serialize_delete)
 		buf.Write(Crc32_check(nil))
 		buf.Write(nil)
 	default:
-		data := vv.i.([]byte)
+		tmp := vv.i.([]byte)
+		tmp2 := make([]byte, len(tmp))
+		copy(tmp2, tmp)
 		buf.WriteByte(serialize_default)
-		buf.Write(Crc32_check(data))
-		buf.Write(data)
-		out := make([]byte, buf.Len())
-		copy(out, buf.Bytes())
-		return out, true
+		buf.Write(Crc32_check(tmp2))
+		buf.Write(tmp2)
 
 	}
 	out := make([]byte, buf.Len())
 	copy(out, buf.Bytes())
-	return out, ok
+	return out
 }
 
 //对应的反序列化方法
@@ -1148,7 +1175,7 @@ func Hset(name string, value interface{}, path string, expire ...int64) bool {
 
 //哈希队列操作函数
 func hash_queue(value *writeHash) {
-	if _, ok := hashcache_q_m.LoadOrStore(uintptr(unsafe.Pointer(value)), true); ok {
+	if _, ok := hashcache_q_m.LoadOrStore(uintptr(unsafe.Pointer(value)), true); ok || NoPersistence {
 		return
 	}
 	queueLock.Lock()
