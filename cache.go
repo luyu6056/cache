@@ -171,11 +171,11 @@ func new_hashvalue(value interface{}, _h *hashvalue) *hashvalue {
 		copy(b, v)
 		h.str = Bytes2str(b)
 		h.i = b
-
+		h.b = b
 	default:
 		h.str = fmt.Sprint(v)
 		h.i = v
-		h.b = json.Marshal(v)
+		h.b, _ = json.Marshal(v)
 	}
 	//h.b = jsoniter.Marshal(i)
 
@@ -868,6 +868,7 @@ const (
 	serialize_f32
 	serialize_f64
 	serialize_byte
+	serialize_sliceuint8 //[]uint8
 	serialize_default
 	serialize_delete
 )
@@ -973,6 +974,11 @@ func serialize(vv *hashvalue) []byte {
 	case "[]byte":
 		tmp := vv.i.([]byte)
 		buf.WriteByte(serialize_byte)
+		buf.Write(Crc32_check(tmp))
+		buf.Write(tmp)
+	case "[]uint8":
+		tmp := vv.i.([]byte)
+		buf.WriteByte(serialize_sliceuint8)
 		buf.Write(Crc32_check(tmp))
 		buf.Write(tmp)
 	case "":
@@ -1136,7 +1142,13 @@ func init_unserialize_func() {
 	unserialize_func[serialize_byte] = func(bin []byte) (*hashvalue, error) {
 		val := &hashvalue{i: bin, b: bin}
 		val.typ = "[]byte"
-		//val.str = Bytes2str(bin)
+		val.str = Bytes2str(bin)
+		return val, nil
+	}
+	unserialize_func[serialize_sliceuint8] = func(bin []byte) (*hashvalue, error) {
+		val := &hashvalue{i: bin, b: bin}
+		val.typ = "[]uint8"
+		val.str = Bytes2str(bin)
 		return val, nil
 	}
 	unserialize_func[serialize_default] = func(bin []byte) (*hashvalue, error) {
