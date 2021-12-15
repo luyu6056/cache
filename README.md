@@ -10,6 +10,9 @@
   cache.StartWebServer("0.0.0.0:8080")
 ```
 
+## NoPersistence
+  cache.NoPersistence = true //关闭持久化功能，缓存增删改不写入硬盘，建议把生成的本地缓存./cache/db.cache ./cache/db.cache.bak一起删除
+  
 ## Hset(name,value path,expire)
 
 * value支持一下三个格式，会转化为string的key与interface{}的value

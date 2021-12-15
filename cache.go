@@ -19,9 +19,9 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/vmihailenco/msgpack/v5"
+	"compress/gzip"
 
-	"github.com/klauspost/compress/gzip"
+	"encoding/json"
 	//"unsafe"
 	//"strings"
 )
@@ -90,7 +90,7 @@ const (
 )
 
 type hashvalue struct {
-	//b   []byte //原始值
+	b             []byte //序列化后的值
 	i             interface{}
 	typ           string //缓存的类型
 	str           string //普通字串解析
@@ -174,7 +174,8 @@ func new_hashvalue(value interface{}, _h *hashvalue) *hashvalue {
 
 	default:
 		h.str = fmt.Sprint(v)
-		h.i, _ = msgpack.Marshal(v)
+		h.i = v
+		h.b = json.Marshal(v)
 	}
 	//h.b = jsoniter.Marshal(i)
 
@@ -235,9 +236,7 @@ func (this *Hashvalue) Get(key string, value interface{}) bool {
 
 	}
 
-	if b, ok := res.i.([]byte); ok {
-		msgpack.Unmarshal(b, value)
-	}
+	json.Unmarshal(res.b, value)
 
 	return true
 }
@@ -981,7 +980,7 @@ func serialize(vv *hashvalue) []byte {
 		buf.Write(Crc32_check(nil))
 		buf.Write(nil)
 	default:
-		tmp := vv.i.([]byte)
+		tmp := vv.b
 		tmp2 := make([]byte, len(tmp))
 		copy(tmp2, tmp)
 		buf.WriteByte(serialize_default)
@@ -1135,13 +1134,13 @@ func init_unserialize_func() {
 		return val, nil
 	}
 	unserialize_func[serialize_byte] = func(bin []byte) (*hashvalue, error) {
-		val := &hashvalue{i: bin}
+		val := &hashvalue{i: bin, b: bin}
 		val.typ = "[]byte"
 		//val.str = Bytes2str(bin)
 		return val, nil
 	}
 	unserialize_func[serialize_default] = func(bin []byte) (*hashvalue, error) {
-		val := &hashvalue{i: bin}
+		val := &hashvalue{b: bin}
 		val.typ = "[]byte"
 		val.str = Bytes2str(bin)
 		return val, nil
