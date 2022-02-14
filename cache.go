@@ -54,7 +54,7 @@ var (
 	writehashLock    sync.RWMutex                                                                               //writehash锁
 	unserialize_func []func(bin []byte) (*hashvalue, error) = make([]func(bin []byte) (*hashvalue, error), 256) //反序列化方法
 	write_lock       sync.Mutex                                                                                 //写文件锁
-	hash_sync_chan   chan []*writeHash                      = make(chan []*writeHash, 1)
+	hash_sync_chan   chan []*writeHash                      = make(chan []*writeHash, 1024)
 	hash_stop        chan int                               = make(chan int)
 )
 
@@ -1197,10 +1197,12 @@ func hash_queue(value *writeHash) {
 	queueLock.Unlock()
 }
 func send_queue() {
-	tmp := make([]*writeHash, len(hashcache_q))
-	copy(tmp, hashcache_q)
-	hash_sync_chan <- tmp
-	hashcache_q = hashcache_q[:0]
+	if len(hashcache_q) > 0 {
+		tmp := make([]*writeHash, len(hashcache_q))
+		copy(tmp, hashcache_q)
+		hash_sync_chan <- tmp
+		hashcache_q = hashcache_q[:0]
+	}
 }
 
 //hash读取
