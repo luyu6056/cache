@@ -236,8 +236,10 @@ func (this *Hashvalue) Get(key string, value interface{}) bool {
 
 	}
 
-	json.Unmarshal(res.b, value)
-
+	err := json.Unmarshal(res.b, value)
+	if err != nil {
+		return false
+	}
 	return true
 }
 
