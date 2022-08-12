@@ -35,7 +35,6 @@ var cachebufpool = sync.Pool{
 //本cache包会监听ctrl+c事件以保证缓存被正确保存
 const (
 	CACHE_FILE_NAME = "db.cache" //持久化储存的文件名
-	CACHE_Path      = "./cache"
 
 	SAVE_TIME  = 1          //持久化间隔时间,单位秒
 	GZIP_LIMIT = 4096       //大于这个尺寸就压缩
@@ -44,6 +43,7 @@ const (
 )
 
 var (
+	CACHE_Path       = "./cache"
 	ISDEBUG          = true                                                                                     //是否fmt打印错误
 	NoPersistence    = false                                                                                    //true则对所有缓存不持久化写入
 	hashcache        sync.Map                                                                                   //储存变量
@@ -1153,7 +1153,7 @@ func init_unserialize_func() {
 	}
 	unserialize_func[serialize_default] = func(bin []byte) (*hashvalue, error) {
 		val := &hashvalue{b: bin}
-		val.typ = "[]byte"
+		val.typ = ""
 		val.str = Bytes2str(bin)
 		return val, nil
 	}
@@ -1397,7 +1397,10 @@ func makehashfromfile(file string, is_main bool) bool {
 	return no_back
 }
 
-func init() {
+func Start(workdir string) {
+	if workdir != "" {
+		CACHE_Path = workdir
+	}
 	if ok, _ := PathExists(CACHE_Path); !ok {
 		err := os.Mkdir(CACHE_Path, os.ModePerm)
 		if err != nil {
