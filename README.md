@@ -4,6 +4,10 @@
 3. 支持多种格式直接保存读取，string,bool,int-int64,uint-uint64,nil,float32,float64,[]byte，其他格式使用json反序列化获取
 
 # 使用说明
+
+## Start(path) 启动
+必须使用Start来启动cache，path为空的时候将缓存保存到./cache文件夹
+
 ## StartWebServer(ipPort)
 开启web监控页面，方便查看当前缓存内存
 ```go
