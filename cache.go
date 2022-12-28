@@ -413,7 +413,7 @@ func (this *Hashvalue) Delete(key string) {
 		result.(*hashvalue).i64 = 0
 		result.(*hashvalue).str = ""
 		result.(*hashvalue).i = nil
-		result.(*hashvalue).typ = ""
+		result.(*hashvalue).typ = "delete"
 		this.writevalue.value.Store(key, result)
 		this.value.Delete(key)
 		hash_write(map[string]map[string]*writeHash{this.writevalue.path: map[string]*writeHash{this.writevalue.name: this.writevalue}})
@@ -983,7 +983,7 @@ func serialize(vv *hashvalue) []byte {
 		buf.WriteByte(serialize_sliceuint8)
 		buf.Write(Crc32_check(tmp))
 		buf.Write(tmp)
-	case "":
+	case "delete":
 		buf.WriteByte(serialize_delete)
 		buf.Write(Crc32_check(nil))
 		buf.Write(nil)
@@ -1331,6 +1331,7 @@ func makehashfromfile(file string, is_main bool) bool {
 		binary.Read(b2, binary.LittleEndian, &l)
 		key := string(b2.Next(int(l)))
 		t := int64(binary.LittleEndian.Uint64(b2.Next(8)))
+
 		if t == expire_delete_name {
 			path_v_i, ok := hashcache.Load(path)
 			if ok {
@@ -1362,10 +1363,8 @@ func makehashfromfile(file string, is_main bool) bool {
 			kk := string(b1.Next(int(l)))
 			v32 = 0
 			binary.Read(b1, binary.LittleEndian, &v32)
-
 			r_v, err := unserialize(b1.Next(int(v32)))
-
-			if err == nil && err1 == nil {
+			if err == nil {
 				va.value.Store(kk, r_v)
 
 			} else if err.Error() == "delete" {
